@@ -1,0 +1,437 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "property-triage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -368,
+        -144
+      ],
+      "id": "0b8ae5b3-725c-4eb3-b777-66fd0252f26b",
+      "name": "Webhook",
+      "webhookId": "39b261f7-6f0e-46fa-b04b-f76240897201"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "36a9d72f-9ebb-4419-a1dc-314cf7d72acf",
+              "leftValue": "={{$json.pass}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -48,
+        -144
+      ],
+      "id": "9cec6b60-0a38-470f-81da-f7c1a0cd2291",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8003/check/input",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $('Webhook').item.json.body.description }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -192,
+        -144
+      ],
+      "id": "722d3fa7-b8fc-494d-9c80-8141038ddcc3",
+      "name": "Guardrails Input Check"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8001/query",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "description",
+              "value": "={{ $('Information Extractor').item.json.description }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        336,
+        -416
+      ],
+      "id": "ef5efb13-bf54-4674-92e6-807248ea7427",
+      "name": "RAG Service"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8004/agent/run",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ \"Analyze this property listing. What renovation or condition issues may exist? Are there similar listings or market insights? Description: \" + $('Information Extractor').item.json.description }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        784,
+        -384
+      ],
+      "id": "54e2cbe6-2d8a-46f7-8c6b-0508e98b06b5",
+      "name": "LangGraph Agent"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8002/analyse",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"image_url\": \"{{ $('Webhook').item.json.body.image_url }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        592,
+        -384
+      ],
+      "id": "8484a4c9-0b3e-4a02-ad75-c3ba02828ead",
+      "name": "Image Analyzer"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8003/check/output",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"text\": \"{{ $('LangGraph Agent').item.json.answer }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        960,
+        -384
+      ],
+      "id": "249431c9-2fe0-4737-b00c-3bda563ebf77",
+      "name": "Output Guardrails"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1552,
+        -400
+      ],
+      "id": "f4ac8802-9979-4094-b692-f473965d88c7",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5743ac22-9841-4e4b-b8b0-79d8975c4208",
+              "name": "property_type",
+              "value": "={{$('Webhook').item.json.body.description.toLowerCase().includes('apartment') ? 'apartment' : 'unknown'}}",
+              "type": "string"
+            },
+            {
+              "id": "bf1c8c31-f102-451b-adf4-463a7b3c2016",
+              "name": "location",
+              "value": "={{$('Webhook').item.json.body.description.toLowerCase().includes('haifa') ? 'Haifa' : 'Unknown'}}",
+              "type": "string"
+            },
+            {
+              "id": "3471579b-e2d7-41aa-a915-0a5b044992d8",
+              "name": "=description",
+              "value": "={{$('Webhook').item.json.body.description}}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        144,
+        -400
+      ],
+      "id": "25fcc02b-d2c1-452b-bc40-4e2d7e9130cd",
+      "name": "Information Extractor"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6a81024c-29cc-4fcd-9b8e-e1f5756167ed",
+              "leftValue": "={{$('Information Extractor').item.json.property_type}}",
+              "rightValue": "apartment",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1168,
+        -384
+      ],
+      "id": "528ddd63-2d8b-40a4-9770-97ba0532abf6",
+      "name": "Router"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "34fdf193-ec6d-4475-b5cd-75a59cbc8a66",
+              "name": "route_to_team",
+              "value": "Residential",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1376,
+        -448
+      ],
+      "id": "9662c8a6-f119-4441-acd2-0aca7cdd2b9a",
+      "name": "Residential Router"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "887d535c-f31d-49b2-adc5-1f0b358f5bbe",
+              "name": "route_to_team",
+              "value": "Commercial",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1376,
+        -288
+      ],
+      "id": "99b69731-bc7f-4de7-97af-0fedf493b530",
+      "name": "Commercial Router"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Guardrails Input Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardrails Input Check": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Service": {
+      "main": [
+        [
+          {
+            "node": "Image Analyzer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Analyzer": {
+      "main": [
+        [
+          {
+            "node": "LangGraph Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LangGraph Agent": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Guardrails": {
+      "main": [
+        [
+          {
+            "node": "Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor": {
+      "main": [
+        [
+          {
+            "node": "RAG Service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router": {
+      "main": [
+        [
+          {
+            "node": "Residential Router",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Commercial Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Residential Router": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commercial Router": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3a722d2b-ba0a-462c-8275-7f0451b08687",
+  "meta": {
+    "instanceId": "8531d4613e3e049d481cc50aff46255db7a7cb45f30d2c603948cffe5262627e"
+  },
+  "nodeGroups": [],
+  "id": "ugmDvVoZiyJSKOgI",
+  "tags": []
+}
