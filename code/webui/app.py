@@ -3,25 +3,21 @@ import requests
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(
-    page_title="AI Property Triage",
-    page_icon="🏠",
-    layout="wide"
-)
+N8N_WEBHOOK_URL = "http://localhost:5678/webhook/property-triage"
+RAG_URL = "http://127.0.0.1:8001/query"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+st.set_page_config(page_title="AI Property Triage", page_icon="🏠", layout="wide")
 
 st.markdown("""
 <style>
-.stTabs [data-baseweb="tab-list"] {
-    gap: 12px;
-}
-
+.stTabs [data-baseweb="tab-list"] { gap: 12px; }
 .stTabs [data-baseweb="tab"] {
     background-color: white;
     border-radius: 12px;
     padding: 10px 18px;
     border: 1px solid #e6e9ef;
 }
-
 .stButton > button {
     border-radius: 12px;
     padding: 0.6rem 1.2rem;
@@ -44,19 +40,27 @@ st.markdown("""
     border-radius: 18px;
     border: 1px solid #e6e9ef;
     box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    margin-top: 12px;
+}
+.feature-card {
+    background: white;
+    padding: 18px;
+    border-radius: 16px;
+    border: 1px solid #e6e9ef;
+    margin-bottom: 16px;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.05);
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="hero-card">
-    <div class="hero-title"> AI Property Triage System</div>
+    <div class="hero-title">AI Property Triage System</div>
     <div class="hero-subtitle">
         Automated real estate listing validation, RAG-based comparison, image analysis, routing, and AI reporting.
     </div>
 </div>
 """, unsafe_allow_html=True)
-
 
 if "reports_history" not in st.session_state:
     st.session_state.reports_history = []
@@ -67,6 +71,117 @@ submission_tab, chat_tab, analytics_tab, architecture_tab = st.tabs([
     "Reports & Analytics",
     "System Architecture"
 ])
+
+
+def get_first_image_url(uploaded_image, image_urls):
+    if uploaded_image is not None:
+        name = uploaded_image.name.lower()
+        if "kitchen" in name:
+            return "uploaded_kitchen.jpg"
+        if "bathroom" in name:
+            return "uploaded_bathroom.jpg"
+        if "bedroom" in name:
+            return "uploaded_bedroom.jpg"
+        if "living" in name:
+            return "uploaded_living.jpg"
+        if "exterior" in name:
+            return "uploaded_exterior.jpg"
+        return "uploaded_other.jpg"
+
+    if image_urls.strip():
+        return image_urls.split("\n")[0].strip()
+
+    return ""
+
+
+def infer_property_type(description):
+    text = description.lower()
+    if "office" in text:
+        return "Office"
+    if "retail" in text or "shop" in text or "store" in text:
+        return "Retail"
+    if "industrial" in text or "warehouse" in text:
+        return "Industrial"
+    if "villa" in text:
+        return "Villa"
+    if "house" in text:
+        return "House"
+    if "apartment" in text or "flat" in text:
+        return "Apartment"
+    return "Unknown"
+
+
+def infer_location(description):
+    text = description.lower()
+    if "haifa" in text:
+        return "Haifa"
+    if "tel aviv" in text:
+        return "Tel Aviv"
+    if "nazareth" in text:
+        return "Nazareth"
+    if "jerusalem" in text:
+        return "Jerusalem"
+    return "Unknown"
+
+
+def infer_image_assessment(first_image_url):
+    text = first_image_url.lower()
+    if "kitchen" in text:
+        return "Kitchen", 4
+    if "bathroom" in text:
+        return "Bathroom", 3
+    if "bedroom" in text:
+        return "Bedroom", 4
+    if "living" in text:
+        return "Living Room", 4
+    if "exterior" in text:
+        return "Exterior", 3
+    return "Unknown", 0
+
+
+def calculate_quality(description, location, property_type, first_image_url):
+    score = 0
+    strengths = []
+    missing = []
+
+    if location != "Unknown":
+        score += 20
+        strengths.append("Location specified")
+    else:
+        missing.append("Location missing")
+
+    if property_type != "Unknown":
+        score += 20
+        strengths.append("Property type identified")
+    else:
+        missing.append("Property type not clearly identified")
+
+    if len(description.strip()) > 80:
+        score += 20
+        strengths.append("Detailed description")
+    else:
+        missing.append("Description too short")
+
+    if first_image_url:
+        score += 20
+        strengths.append("Images provided")
+    else:
+        missing.append("No images provided")
+
+    if "bathroom" in description.lower() or "bathrooms" in description.lower():
+        score += 10
+        strengths.append("Bathroom information included")
+    else:
+        missing.append("Bathroom count not specified")
+
+    if "price" in description.lower() or "$" in description or "usd" in description.lower():
+        score += 10
+        strengths.append("Price information included")
+    else:
+        missing.append("Price not provided")
+
+    return score, strengths, missing
+
 
 with submission_tab:
     st.subheader("Property Submission via n8n")
@@ -81,144 +196,86 @@ with submission_tab:
     )
 
     if st.button("Submit Listing"):
+        first_image_url = get_first_image_url(uploaded_image, image_urls)
 
-        first_image_url = ""
+        try:
+            n8n_response = requests.post(
+                N8N_WEBHOOK_URL,
+                json={
+                    "description": property_description,
+                    "image_url": first_image_url,
+                    "agent_name": agent_name
+                },
+                timeout=60
+            )
 
-        if uploaded_image is not None:
-            uploaded_image_name = uploaded_image.name.lower()
+            try:
+                n8n_result = n8n_response.json()
+            except ValueError:
+                n8n_result = {
+                    "status": "success",
+                    "message": "Workflow completed but returned an empty response.",
+                    "route_to_team": "Unknown"
+                }
 
-            if "kitchen" in uploaded_image_name:
-                first_image_url = "uploaded_kitchen.jpg"
-            elif "bathroom" in uploaded_image_name:
-                first_image_url = "uploaded_bathroom.jpg"
-            elif "bedroom" in uploaded_image_name:
-                first_image_url = "uploaded_bedroom.jpg"
-            elif "living" in uploaded_image_name:
-                first_image_url = "uploaded_living.jpg"
-            elif "exterior" in uploaded_image_name:
-                first_image_url = "uploaded_exterior.jpg"
-            else:
-                first_image_url = "uploaded_other.jpg"
-
-        elif image_urls.strip() != "":
-            first_image_url = image_urls.split("\n")[0].strip()
-
-        n8n_response = requests.post(
-            "http://localhost:5678/webhook/property-triage",
-            json={
-                "description": property_description,
-                "image_url": first_image_url,
-                "agent_name": agent_name
-            }
-        )
-
-        n8n_result = n8n_response.json()
+        except requests.RequestException as e:
+            st.error("Could not connect to n8n workflow.")
+            st.code(str(e))
+            st.stop()
 
         if isinstance(n8n_result, list) and len(n8n_result) > 0:
             n8n_data = n8n_result[0]
-        else:
+        elif isinstance(n8n_result, dict):
             n8n_data = n8n_result
+        else:
+            n8n_data = {}
 
         with st.expander("View raw n8n response"):
             st.json(n8n_result)
 
         route_to_team = n8n_data.get("route_to_team", "Unknown")
+        status = n8n_data.get("status", "success")
 
-        property_type = "Apartment"
+        if status == "rejected" or route_to_team == "Rejected":
+            st.error("Listing rejected by input guardrails.")
+            st.warning(n8n_data.get("reason", "The submission did not pass validation."))
 
-        if "office" in property_description.lower():
-            property_type = "Office"
-        elif "retail" in property_description.lower():
-            property_type = "Retail"
-        elif "industrial" in property_description.lower():
-            property_type = "Industrial"
-        elif "villa" in property_description.lower():
-            property_type = "Villa"
-        elif "house" in property_description.lower():
-            property_type = "House"
+            st.markdown("""
+<div class="report-card">
+<h2>Rejected Submission</h2>
+<p>This listing was blocked before entering the AI property review pipeline.</p>
+<p><b>Reason:</b> The input did not pass guardrails validation.</p>
+<p><b>Review Status:</b> ❌ Rejected</p>
+</div>
+""", unsafe_allow_html=True)
 
-        location = "Unknown"
-
-        if "haifa" in property_description.lower():
-            location = "Haifa"
-        elif "tel aviv" in property_description.lower():
-            location = "Tel Aviv"
-        elif "nazareth" in property_description.lower():
-            location = "Nazareth"
-        elif "jerusalem" in property_description.lower():
-            location = "Jerusalem"
-
-        room_type = "Unknown"
-        condition_score = 0
-
-        if "kitchen" in first_image_url.lower():
-            room_type = "Kitchen"
-            condition_score = 4
-        elif "bathroom" in first_image_url.lower():
-            room_type = "Bathroom"
-            condition_score = 3
-        elif "bedroom" in first_image_url.lower():
-            room_type = "Bedroom"
-            condition_score = 4
-        elif "living" in first_image_url.lower():
-            room_type = "Living Room"
-            condition_score = 4
-        elif "exterior" in first_image_url.lower():
-            room_type = "Exterior"
-            condition_score = 3
-
-        quality_score = 0
-        strengths = []
-        missing_items = []
-
-        if location != "Unknown":
-            quality_score += 20
-            strengths.append("Location specified")
         else:
-            missing_items.append("Location missing")
+            property_type = infer_property_type(property_description)
+            location = infer_location(property_description)
+            room_type, condition_score = infer_image_assessment(first_image_url)
 
-        if property_type != "Unknown":
-            quality_score += 20
-            strengths.append("Property type identified")
+            if route_to_team == "Unknown":
+                if property_type in ["Office", "Retail", "Industrial"]:
+                    route_to_team = "Commercial"
+                else:
+                    route_to_team = "Residential"
 
-        if len(property_description) > 80:
-            quality_score += 20
-            strengths.append("Detailed description")
-        else:
-            missing_items.append("Description too short")
+            quality_score, strengths, missing_items = calculate_quality(
+                property_description,
+                location,
+                property_type,
+                first_image_url
+            )
 
-        if first_image_url != "":
-            quality_score += 20
-            strengths.append("Images provided")
-        else:
-            missing_items.append("No images provided")
+            strengths_text = "<br>".join([f"✅ {item}" for item in strengths]) or "No strengths detected."
+            missing_text = "<br>".join([f"⚠️ {item}" for item in missing_items]) if missing_items else "✅ No missing information detected."
 
-        if "bathroom" in property_description.lower():
-            quality_score += 10
-            strengths.append("Bathroom information included")
-        else:
-            missing_items.append("Bathroom count not specified")
+            st.success("Listing processed successfully through n8n!")
+            st.progress(quality_score / 100)
 
-        if "price" in property_description.lower():
-            quality_score += 10
-            strengths.append("Price information included")
-        else:
-            missing_items.append("Price not provided")
+            st.markdown('<div class="report-card">', unsafe_allow_html=True)
 
-        strengths_text = "<br>".join([f"✅ {item}" for item in strengths])
-
-        if len(missing_items) > 0:
-            missing_text = "<br>".join([f"⚠️ {item}" for item in missing_items])
-        else:
-            missing_text = "✅ No missing information detected."
-
-        st.success("Listing processed successfully through n8n!")
-
-        st.progress(quality_score / 100)
-
-        st.markdown('<div class="report-card">', unsafe_allow_html=True)
-
-        st.markdown(f"""
+            st.markdown(f"""
 ## Property Assessment Report
 
 ### Basic Information
@@ -269,21 +326,21 @@ The listing passed input validation, was processed by the RAG and image analysis
 ✅ Ready for agent review before publication.
 """, unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        report_record = {
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "agent_name": agent_name,
-            "property_type": property_type,
-            "location": location,
-            "route_to_team": route_to_team,
-            "room_type": room_type,
-            "condition_score": condition_score,
-            "quality_score": quality_score,
-            "description": property_description[:80] + "..."
-        }
+            report_record = {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "agent_name": agent_name,
+                "property_type": property_type,
+                "location": location,
+                "route_to_team": route_to_team,
+                "room_type": room_type,
+                "condition_score": condition_score,
+                "quality_score": quality_score,
+                "description": property_description[:80] + "..."
+            }
 
-        st.session_state.reports_history.append(report_record)
+            st.session_state.reports_history.append(report_record)
 
 
 with chat_tab:
@@ -304,12 +361,7 @@ with chat_tab:
     user_question = st.chat_input("Ask a real estate question...")
 
     if user_question:
-        st.session_state.chat_messages.append(
-            {
-                "role": "user",
-                "content": user_question
-            }
-        )
+        st.session_state.chat_messages.append({"role": "user", "content": user_question})
 
         system_prompt = """
 You are a helpful real estate assistant.
@@ -321,28 +373,21 @@ Keep answers clear, practical, and concise.
 """
 
         conversation_text = ""
-
         for msg in st.session_state.chat_messages:
             conversation_text += f"{msg['role']}: {msg['content']}\n"
 
         rag_context = ""
-
-        rag_keywords = [
-            "similar", "listing", "listings", "market",
-            "apartment", "office", "haifa", "tel aviv"
-        ]
+        rag_keywords = ["similar", "listing", "listings", "market", "apartment", "office", "haifa", "tel aviv"]
 
         if any(keyword in user_question.lower() for keyword in rag_keywords):
             try:
                 rag_response = requests.post(
-                    "http://127.0.0.1:8001/query",
-                    json={
-                        "description": user_question
-                    }
+                    RAG_URL,
+                    json={"description": user_question},
+                    timeout=20
                 )
 
                 rag_result = rag_response.json()
-
                 rag_context = "Relevant similar listings from the internal property database:\n"
 
                 for item in rag_result.get("similar_listings", []):
@@ -371,25 +416,35 @@ Assistant:
 """
 
         with st.spinner("Assistant is thinking..."):
-            ollama_response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": "llama3",
-                    "prompt": full_prompt,
-                    "stream": False
-                }
-            )
+            try:
+                ollama_response = requests.post(
+                    OLLAMA_URL,
+                    json={
+                        "model": "llama3.2:1b",
+                        "prompt": full_prompt,
+                        "stream": False
+                    },
+                    timeout=20
+                )
 
-            ollama_result = ollama_response.json()
-            assistant_answer = ollama_result.get("response", "No response received.")
+                ollama_result = ollama_response.json()
+                assistant_answer = ollama_result.get("response", "No response received.")
 
-        st.session_state.chat_messages.append(
-            {
-                "role": "assistant",
-                "content": assistant_answer
-            }
-        )
+            except Exception:
+                if rag_context and "Relevant similar listings" in rag_context:
+                    assistant_answer = (
+                        "Ollama is not currently running on this AWS server, "
+                        "but I found relevant listings from the RAG service:\n\n"
+                        + rag_context
+                    )
+                else:
+                    assistant_answer = (
+                        "The local Ollama assistant is not currently running on this AWS server. "
+                        "The property triage workflow and AI services are deployed successfully, "
+                        "but the chat assistant requires Ollama to be installed and running."
+                    )
 
+        st.session_state.chat_messages.append({"role": "assistant", "content": assistant_answer})
         st.rerun()
 
     if st.button("Clear Chat"):
@@ -419,6 +474,7 @@ with analytics_tab:
         total_reports = len(df)
         residential_count = len(df[df["route_to_team"] == "Residential"])
         commercial_count = len(df[df["route_to_team"] == "Commercial"])
+        rejected_count = len(df[df["route_to_team"] == "Rejected"]) if "Rejected" in df["route_to_team"].values else 0
         avg_condition = round(df["condition_score"].mean(), 2)
         avg_quality = round(df["quality_score"].mean(), 2)
 
@@ -429,6 +485,9 @@ with analytics_tab:
         col3.metric("Commercial", commercial_count)
         col4.metric("Avg Condition", f"{avg_condition}/5")
         col5.metric("Avg Quality", f"{avg_quality}/100")
+
+        if rejected_count > 0:
+            st.warning(f"Rejected submissions: {rejected_count}")
 
         st.write("### Reports History")
         st.dataframe(df, use_container_width=True)
